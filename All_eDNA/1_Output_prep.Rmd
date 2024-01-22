@@ -1,0 +1,110 @@
+---
+title: "Prepare data for WinBUGS"
+author: "Lara Katz"
+date: "2023-12-31"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load libraries:
+```{r}
+library(tidyverse)
+library(lubridate)
+```
+
+Set Cq threshold value:
+```{r}
+cq <- 50
+```
+
+Import data:
+```{r}
+data <- read.csv("./eDNA_results_2021-2023.csv", header = TRUE)
+
+data1 <- transform(data,
+                   Filter.Number = Filter.Number,
+                   Filtering.Date = mdy(Filtering.Date),
+                   Site = as.factor(Site),
+                   Replicate = Replicate,
+                   Volume.Filtered..mL. = as.integer(Volume.Filtered..mL.),
+                   Combined.Sample. = as.factor(Combined.Sample.),
+                   qpcr.date = as.factor(qpcr.date),
+                   pos = as.factor(pos),
+                   no.reps.pos = as.character(no.reps.pos),
+                   cq1 = as.numeric(cq1),
+                   cq2 = as.numeric(cq2),
+                   cq3 = as.numeric(cq3),
+                   cq4 = as.numeric(cq4),
+                   cq5 = as.numeric(cq5),
+                   cq6 = as.numeric(cq6),
+                   cq7 = as.numeric(cq7),
+                   cq8 = as.numeric(cq8),
+                   notes = notes,
+                   plate = as.factor(plate))
+```
+
+Filter out field controls and samples with no PCR results:
+```{r}
+rm <- list("Control", "B-R1", "B-R2", "B-R3", "B-R4", "B-R5",
+        "C-R1", "C-R2", "C-R3", "C-R4", "C-R5")
+data.pcr <- data1[!is.na(data1$pos),] %>%  # remove NAs (site HALEY)
+  filter(., Volume.Filtered..mL. > 100) # remove LITTLP (84mL)
+  
+for (i in 1:length(rm)) {
+  data.pcr <- filter(data.pcr, Replicate != rm[[i]])
+}
+
+data.pcr[data.pcr$Replicate == "A-R1",]$Replicate <- "R1"
+data.pcr[data.pcr$Replicate == "A-R2",]$Replicate <- "R2"
+data.pcr[data.pcr$Replicate == "A-R3",]$Replicate <- "R3"
+data.pcr[data.pcr$Replicate == "A-R4",]$Replicate <- "R4"
+data.pcr[data.pcr$Replicate == "A-R5",]$Replicate <- "R5"
+
+summary(data.pcr)
+```
+
+## All historic and new sites
+
+Select only the first sampling occasion for sites sampled more than once:
+```{r}
+ossipe.min <- min(data.pcr[data.pcr$Site == "OSSIPE",]$Filtering.Date) # seasonal site
+ossipe <- data.pcr[data.pcr$Site == "OSSIPE" & data.pcr$Filtering.Date == ossipe.min,]
+
+presum.min <- min(data.pcr[data.pcr$Site == "PRESUM-01",]$Filtering.Date) # seasonal site
+presum <- data.pcr[data.pcr$Site == "PRESUM-01" & data.pcr$Filtering.Date == presum.min,]
+
+watbrk.min <- min(data.pcr[data.pcr$Site == "WATBRK",]$Filtering.Date) # seasonal site
+watbrk <- data.pcr[data.pcr$Site == "WATBRK" & data.pcr$Filtering.Date == watbrk.min,]
+
+barker.min <- min(data.pcr[data.pcr$Site == "BARKER",]$Filtering.Date) # filter pore size site
+barker <- data.pcr[data.pcr$Site == "BARKER" & data.pcr$Filtering.Date == barker.min,]
+
+data.pcr2 <- data.pcr %>% filter(., Site != "BARKER") %>% filter(., Site != "PRESUM-01") %>% filter(., Site != "OSSIPE") %>% filter(., Site != "WATBRK")
+
+occu.sites <- rbind(data.pcr2, barker, presum, ossipe, watbrk)
+```
+
+Determine which Cq reps are positive (depending on the Cq threshold set above). Replicates that did not amplify are denoted by the 999 value:
+```{r}
+rep.cols <- c("cq1", "cq2", "cq3", "cq4", "cq5", "cq6", "cq7", "cq8")
+
+occu.pres <- occu.sites %>% mutate(across(rep.cols, ~if_else(. <= cq, 1, 0), .names = "pres_{.col}"))
+write.csv(occu.pres, "./occu_pres.csv", row.names = FALSE)
+```
+
+Pivot Cq values to create input csv files for the occupancy model. Each Cq replicate will have a separate csv:
+```{r}
+occu.pres$Replicate <- as.factor(occu.pres$Replicate)
+rep.cols2 <- c("pres_cq1", "pres_cq2", "pres_cq3", "pres_cq4", "pres_cq5", "pres_cq6", "pres_cq7", "pres_cq8")
+
+for (i in 1:length(rep.cols2)){
+occu.pres2 <- occu.pres %>% select(Site, Replicate, rep.cols2[i]) %>% 
+  pivot_wider(., names_from = Replicate, values_from = rep.cols2[i]) %>% 
+  arrange(Site)
+colnames(occu.pres2) <- c("","R1","R2","R3","R4","R5")
+write.csv(occu.pres2, paste0(paste0("./qpcr_rep", i), "_cq50.csv"), row.names = FALSE) # change ouput file name depending on which threshold is used
+}
+```

@@ -1,0 +1,486 @@
+---
+title: "Bridle shiner 3-tiered hierarchical occupancy model in WinBUGS"
+author: "Lara Katz adapted from code by Geneva York & Erik Blomberg"
+date: "2024-01-03"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This code is based on the hierarchical occupancy model described in:
+Kéry, M., and Royle, J.A. 2016. Applied hierarchical modeling in ecology: analysis of distribution, abundance and species richness in R and BUGS. Academic Press/Elsevier, Amsterdam; Boston.
+
+**Install WinBUGS before continuing.**
+
+Load required packages:
+```{r, warning=FALSE, message=FALSE}
+library(emdbook)
+library(ggplot2)
+library(gridExtra)
+library(R2WinBUGS)
+```
+
+# Presence threshold: Cq = 40
+
+Import eDNA data (split by qPCR replicate). Most samples have 4 replicates but some have 8:
+```{r}
+pcr1 <- read.csv("./qpcr_rep1_cq40.csv", header=TRUE, row.names = 1) 
+pcr2 <- read.csv("./qpcr_rep2_cq40.csv", header=TRUE, row.names = 1)  
+pcr3 <- read.csv("./qpcr_rep3_cq40.csv", header=TRUE, row.names = 1)  
+pcr4 <- read.csv("./qpcr_rep4_cq40.csv", header=TRUE, row.names = 1) 
+pcr5 <- read.csv("./qpcr_rep5_cq40.csv", header=TRUE, row.names = 1) 
+pcr6 <- read.csv("./qpcr_rep6_cq40.csv", header=TRUE, row.names = 1)  
+pcr7 <- read.csv("./qpcr_rep7_cq40.csv", header=TRUE, row.names = 1)  
+pcr8 <- read.csv("./qpcr_rep8_cq40.csv", header=TRUE, row.names = 1) 
+```
+
+Create empty array of 8, 93x5 matrices:
+```{r}
+A <- array(as.numeric(NA), dim = c(93,5,8))
+```
+
+Fill array with eDNA data. Array dimensions are [1:93 (sites), 1:5 (sample replicates), 1:8 (qPCR replicates)]:
+```{r}
+A[,,1]<-as.matrix(pcr1)
+A[,,2]<-as.matrix(pcr2) 
+A[,,3]<-as.matrix(pcr3) 
+A[,,4]<-as.matrix(pcr4) 
+A[,,5]<-as.matrix(pcr5)
+A[,,6]<-as.matrix(pcr6) 
+A[,,7]<-as.matrix(pcr7) 
+A[,,8]<-as.matrix(pcr8) 
+
+y <- A 
+```
+
+## WinBUGS model
+
+Format data for WinBUGS:
+```{r}
+str( win.data40 <- list(y = y, # data used to fill array
+                      n.site = dim(y)[1], # number of rows = number of sites (93)
+                      n.samples = dim(y)[2], # number of columns = number of 1L replicate samples/site (up to 5)
+                      n.pcr = dim(y)[3] )) # number of PCR replicates (up to 8)
+```
+
+Define model in BUGS language:
+```{r, include=TRUE, eval=FALSE}
+sink("eDNA.model40.txt") 
+
+cat("
+model{
+# Priors and model for params 
+  int.psi ~ dunif(0,1) # Intercept of occupancy probability (sites) 
+  for(t in 1:n.samples){ 
+      int.theta[t] ~ dunif(0,1)} # Intercepts of availability probability per sample replicate
+                             
+  for(t in 1:n.pcr){ 
+      int.p[t] ~ dunif(0,1)}  # Intercepts of detection probability (1-PCR error)
+      
+# 'Likelihood' (or basic model structure)
+  
+  ## Occurrence in site i 
+  for(i in 1:n.site){ 
+      z[i] ~ dbern(psi[i]) 
+      logit(psi[i]) <- logit(int.psi) 
+      
+      ## Occurrence in sample j 
+      for(j in 1:n.samples){ 
+          a[i,j] ~ dbern(mu.a[i,j])
+          mu.a[i,j] <- z[i] * theta[i,j]
+          logit(theta[i,j]) <- logit(int.theta[j])
+  
+          ## PCR detection error process in sample k 
+          for (k in 1:n.pcr){ 
+               y[i,j,k] ~ dbern(mu.y[i,j,k]) 
+               mu.y[i,j,k] <- a[i,j] * p[i,j,k] 
+               logit(p[i,j,k]) <- logit(int.p[k])
+                            }
+                          }
+                tmp[i] <- step(sum(a[i,])-0.1) 
+                        }
+
+# Derived quantities 
+sum.z <- sum(z[]) # Total number of occupied sites 
+sum.a <- sum(tmp[]) # Total number of samples with presence 
+mean.p <- mean(int.p[]) # mean p across qPCR replicates 
+mean.theta <- mean(int.theta[]) # mean theta across sample replicates 
+
+} # end model 
+",fill=TRUE)
+
+sink()
+```
+
+Initial values:
+```{r}
+zst <- apply(y, 1, max) # inits for presence (z) 
+ast <- apply(y, c(1,2), max) # inits for availability (a): applies the "max" function to all matrix rows and columns in the array
+inits <- function() list(z = zst, a = ast, int.psi = 0.5)
+```
+
+Parameters:
+```{r}
+params <- c("int.psi","int.theta","int.p","sum.z","sum.a","mean.p","mean.theta") 
+```
+
+MCMC settings:
+```{r}
+ni <- 25000 ; nt <- 10 ; nb <- 2000 ; nc <- 3
+```
+
+Call WinBUGS and summarize posterior:
+```{r, include=TRUE, eval=FALSE}
+bd <- "C:/Program Files/winbugs14_full_patched/WinBUGS14" # Location of WinBUGS
+
+eDNA.out40 <- bugs(win.data40, inits, params, "eDNA.model40.txt", 
+                 n.chains = nc, n.thin = nt, 
+                 n.iter = ni, n.burnin = nb, 
+                 debug = TRUE, bugs.seed = 42,
+                 bugs.dir = bd)
+saveRDS(eDNA.out40, "./eDNA_out40.RDS")
+```
+
+View posterior summary:
+```{r, cache=TRUE}
+eDNA.out40 <- readRDS("./eDNA_out40.RDS")
+print(eDNA.out40, 4)
+```
+
+## Calculate p-star and theta-star (code from Erik Blomberg)
+
+Calculate p*:
+```{r}
+no.pcr <- seq(1,10,1) # 1-10 qPCR replicates
+
+pstar <- 1-((1-eDNA.out40$mean$mean.p)^no.pcr)
+
+sigma <- matrix(c(eDNA.out40$sd$mean.p^2,0, 
+                  0,0), nrow=2)
+
+pstar.se <- vector(length=length(pstar)) 
+
+for (i in 1:length(no.pcr)){
+  pstar.se[i]<- sqrt(deltavar(1-((1-x)^y),
+                              meanval = c(x=eDNA.out40$mean$mean.p, y=no.pcr[i]),
+                              Sigma=sigma)) }
+
+pstar.df <- data.frame(pcr=no.pcr, pstar = pstar, se=pstar.se)
+```
+
+Calculate 95% confidence intervals:
+```{r}
+pstar.df$lower <- pstar.df$pstar - pstar.df$se*1.96
+pstar.df$upper <- pstar.df$pstar + pstar.df$se*1.96
+pstar.df$upper[pstar.df$upper > 1] <- 1
+write.csv(pstar.df, "./pstar_cq40.csv")
+pstar.df
+```
+
+```{r, include=FALSE}
+# Pstar plot
+pstar.95 <- 5 # number of samples needed for detection to exceed 95%
+pstar.80 <- 3 #80% 
+pstar.50 <- 1 #50%
+
+pstar.plot <- ggplot(data=pstar.df, aes(x=pcr, y=pstar))+
+  geom_ribbon(aes(x=pcr,ymin=`lower`, ymax=`upper`),fill="gray", alpha=.6)+
+  geom_line(linewidth=1)+
+  geom_vline(xintercept=pstar.80, color='gray10', linetype="dashed", linewidth=0.8)+
+  ylab("Cumulative detection probability (p*)")+
+  xlab("Number of qPCR replicates")+
+  theme_classic()+
+  theme(text = element_text(size = 20)) +
+  coord_cartesian(ylim = c(0.1,1), xlim = c(1,10)) +
+  annotate("text", x = Inf, y = Inf, label = paste("B"), vjust = 24, hjust = 1.5, size = 8)
+pstar.plot
+```
+
+Calculate theta*:
+```{r}
+no.samples <- seq(1,10,1) # Number of water sample replicates
+
+tstar <- 1-((1-eDNA.out40$mean$mean.theta)^no.samples)
+
+sigma.t <- matrix(c(eDNA.out40$sd$mean.theta^2,0, 
+                  0,0), nrow=2)
+
+tstar.se <- vector(length=length(tstar))
+
+for (i in 1:length(no.samples)){
+    tstar.se[i]<- sqrt(deltavar(1-((1-x)^y),
+                       meanval = c(x=eDNA.out40$mean$mean.theta, y=no.samples[i]),
+                       Sigma=sigma.t)) }
+
+tstar.df <- data.frame(samples=no.samples, tstar = tstar, se=tstar.se)
+```
+
+95% confidence intervals:
+```{r}
+tstar.df$lower <- tstar.df$tstar - tstar.df$se*1.96
+tstar.df$upper <- tstar.df$tstar + tstar.df$se*1.96
+tstar.df$upper[tstar.df$upper > 1] <- 1
+write.csv(tstar.df, "./thetastar40.csv")
+tstar.df
+```
+
+```{r, include=FALSE}
+# Theta* plot:
+tstar.95 <- 4 # number of samples needed for detection to exceed 95%
+tstar.80 <- 3 #80% 
+tstar.50 <- 1 #50%
+
+tstar.plot<- ggplot(data=tstar.df, aes(x=samples, y=tstar))+
+  geom_ribbon(aes(x=samples,ymin=`lower`, ymax=`upper`),fill="gray", alpha=.6)+
+  geom_line(linewidth=1)+
+  geom_vline(xintercept=tstar.80, color='gray10', linetype="dashed", linewidth=0.8)+
+  ylab(expression("Cumulative availability probability (" ~ theta ~ "*)")) +
+  xlab("Number of 1L samples")+
+  theme_classic()+
+  theme(text = element_text(size = 20)) +
+  coord_cartesian(ylim = c(0.1,1), xlim = c(1,10)) +
+  annotate("text", x = Inf, y = Inf, label = paste("A"), vjust = 24, hjust = 1.5, size = 8)
+tstar.plot
+```
+
+```{r, include=FALSE}
+# Save plots
+png(filename="./pstar_thetastar_cq40.png", width = 1000)
+grid.arrange(pstar.plot, tstar.plot, nrow = 1)
+dev.off()
+```
+
+
+# Presence threshold: Cq = 50
+
+Import eDNA data (split by qPCR replicate). Most samples have 4 replicates but some have 8:
+```{r}
+pcr1 <- read.csv("./qpcr_rep1_cq50.csv", header=TRUE, row.names = 1) 
+pcr2 <- read.csv("./qpcr_rep2_cq50.csv", header=TRUE, row.names = 1)  
+pcr3 <- read.csv("./qpcr_rep3_cq50.csv", header=TRUE, row.names = 1)  
+pcr4 <- read.csv("./qpcr_rep4_cq50.csv", header=TRUE, row.names = 1) 
+pcr5 <- read.csv("./qpcr_rep5_cq50.csv", header=TRUE, row.names = 1) 
+pcr6 <- read.csv("./qpcr_rep6_cq50.csv", header=TRUE, row.names = 1)  
+pcr7 <- read.csv("./qpcr_rep7_cq50.csv", header=TRUE, row.names = 1)  
+pcr8 <- read.csv("./qpcr_rep8_cq50.csv", header=TRUE, row.names = 1) 
+```
+
+Create empty array of 8, 93x5 matrices:
+```{r}
+A <- array(as.numeric(NA), dim = c(93,5,8))
+```
+
+Fill array with eDNA data. Array dimensions are [1:93 (sites), 1:5 (sample replicates), 1:8 (qPCR replicates)]:
+```{r}
+A[,,1]<-as.matrix(pcr1)
+A[,,2]<-as.matrix(pcr2) 
+A[,,3]<-as.matrix(pcr3) 
+A[,,4]<-as.matrix(pcr4) 
+A[,,5]<-as.matrix(pcr5)
+A[,,6]<-as.matrix(pcr6) 
+A[,,7]<-as.matrix(pcr7) 
+A[,,8]<-as.matrix(pcr8) 
+
+y <- A 
+```
+
+## WinBUGS model
+
+Format data for WinBUGS:
+```{r}
+str( win.data50 <- list(y = y, # data used to fill array
+                      n.site = dim(y)[1], # number of rows = number of sites (93)
+                      n.samples = dim(y)[2], # number of columns = number of 1L replicate samples/site (up to 5)
+                      n.pcr = dim(y)[3] )) # number of PCR replicates (up to 8)
+```
+
+Define model in BUGS language:
+```{r, include=TRUE, eval=FALSE}
+sink("eDNA.model50.txt") 
+
+cat("
+model{
+# Priors and model for params 
+  int.psi ~ dunif(0,1) # Intercept of occupancy probability (sites) 
+  for(t in 1:n.samples){ 
+      int.theta[t] ~ dunif(0,1)} # Intercepts of availability probability per sample replicate
+                             
+  for(t in 1:n.pcr){ 
+      int.p[t] ~ dunif(0,1)}  # Intercepts of detection probability (1-PCR error)
+      
+# 'Likelihood' (or basic model structure)
+  
+  ## Occurrence in site i 
+  for(i in 1:n.site){ 
+      z[i] ~ dbern(psi[i]) 
+      logit(psi[i]) <- logit(int.psi) 
+      
+      ## Occurrence in sample j 
+      for(j in 1:n.samples){ 
+          a[i,j] ~ dbern(mu.a[i,j])
+          mu.a[i,j] <- z[i] * theta[i,j]
+          logit(theta[i,j]) <- logit(int.theta[j])
+  
+          ## PCR detection error process in sample k 
+          for (k in 1:n.pcr){ 
+               y[i,j,k] ~ dbern(mu.y[i,j,k]) 
+               mu.y[i,j,k] <- a[i,j] * p[i,j,k] 
+               logit(p[i,j,k]) <- logit(int.p[k])
+                            }
+                          }
+                tmp[i] <- step(sum(a[i,])-0.1) 
+                        }
+
+# Derived quantities 
+sum.z <- sum(z[]) # Total number of occupied sites 
+sum.a <- sum(tmp[]) # Total number of samples with presence 
+mean.p <- mean(int.p[]) # mean p across qPCR replicates 
+mean.theta <- mean(int.theta[]) # mean theta across sample replicates 
+
+} # end model 
+",fill=TRUE)
+
+sink()
+```
+
+Initial values:
+```{r}
+zst <- apply(y, 1, max) # inits for presence (z) 
+ast <- apply(y, c(1,2), max) # inits for availability (a): applies the "max" function to all matrix rows and columns in the array
+inits <- function() list(z = zst, a = ast, int.psi = 0.5)
+```
+
+Parameters:
+```{r}
+params <- c("int.psi", "int.theta", "int.p", "sum.z", "sum.a", "mean.p","mean.theta", "z") 
+```
+
+MCMC settings: 
+```{r}
+ni <- 25000 ; nt <- 10 ; nb <- 2000 ; nc <- 3
+```
+
+Call WinBUGS and summarize posterior:
+```{r, include=TRUE, eval=FALSE}
+bd <- "C:/Program Files/winbugs14_full_patched/WinBUGS14" # Location of WinBUGS
+
+eDNA.out50 <- bugs(win.data50, inits, params, "eDNA.model50.txt", 
+                 n.chains = nc, n.thin = nt, 
+                 n.iter = ni, n.burnin = nb, 
+                 debug = TRUE, bugs.seed = 42,
+                 bugs.dir = bd)
+saveRDS(eDNA.out50, "./eDNA_out50.RDS")
+```
+
+View posterior summary:
+```{r, cache=TRUE}
+eDNA.out50 <- readRDS("./eDNA_out50.RDS")
+#print(eDNA.out40, 4)
+print(eDNA.out50, 4)
+```
+
+## Calculate p-star and theta-star (code from Erik Blomberg)
+
+Calculate p*:
+```{r}
+no.pcr <- seq(1,10,1) # 1-10 qPCR replicates
+
+pstar50 <- 1-((1-eDNA.out50$mean$mean.p)^no.pcr)
+
+sigma50 <- matrix(c(eDNA.out50$sd$mean.p^2,0, 
+                  0,0), nrow=2)
+
+pstar.se50 <- vector(length=length(pstar50)) 
+
+for (i in 1:length(no.pcr)){
+  pstar.se50[i]<- sqrt(deltavar(1-((1-x)^y),
+                              meanval = c(x=eDNA.out50$mean$mean.p, y=no.pcr[i]),
+                              Sigma=sigma50)) }
+
+pstar.df50 <- data.frame(pcr=no.pcr, pstar = pstar50, se=pstar.se50)
+```
+
+95% Confidence Intervals:
+```{r}
+pstar.df50$lower <- pstar.df50$pstar - pstar.df50$se*1.96
+pstar.df50$upper <- pstar.df50$pstar + pstar.df50$se*1.96
+pstar.df50$upper[pstar.df50$upper > 1] <- 1
+write.csv(pstar.df50, "./pstar_cq50.csv")
+pstar.df50
+```
+
+```{r, include=FALSE}
+# Pstar plot
+pstar.95 <- 5 # number of samples needed for detection to exceed 95%
+pstar.80 <- 3 #80% 
+pstar.50 <- 1 #50%
+
+pstar.plot50 <- ggplot(data=pstar.df50, aes(x=pcr, y=pstar))+
+  geom_ribbon(aes(x=pcr,ymin=`lower`, ymax=`upper`),fill="gray", alpha=.6)+
+  geom_line(linewidth=1)+
+  geom_vline(xintercept=pstar.80, color='gray10', linetype="dashed", linewidth=0.8)+
+  ylab("Cumulative detection probability (p*)")+
+  xlab("Number of qPCR replicates")+
+  theme_classic()+
+  theme(text = element_text(size = 20)) +
+  coord_cartesian(ylim = c(0.1,1), xlim = c(1,10)) +
+  annotate("text", x = Inf, y = Inf, label = paste("B"), vjust = 24, hjust = 1.5, size = 8)
+pstar.plot50
+```
+
+Calculate theta*:
+```{r}
+no.samples <- seq(1,10,1) # Number of water samples
+
+tstar50 <- 1-((1-eDNA.out50$mean$mean.theta)^no.samples)
+
+sigma.t50 <- matrix(c(eDNA.out50$sd$mean.theta^2,0, 
+                  0,0), nrow=2)
+
+tstar.se50 <- vector(length=length(tstar50))
+
+for (i in 1:length(no.samples)){
+    tstar.se50[i]<- sqrt(deltavar(1-((1-x)^y),
+                       meanval = c(x=eDNA.out50$mean$mean.theta, y=no.samples[i]),
+                       Sigma=sigma.t50)) }
+
+tstar.df50 <- data.frame(samples=no.samples, tstar = tstar50, se=tstar.se50)
+```
+
+95% confidence intervals:
+```{r}
+tstar.df50$lower <- tstar.df50$tstar - tstar.df50$se*1.96
+tstar.df50$upper <- tstar.df50$tstar + tstar.df50$se*1.96
+tstar.df50$upper[tstar.df50$upper > 1] <- 1
+write.csv(tstar.df50, "./thetastar50.csv")
+tstar.df50
+```
+
+```{r, include=FALSE}
+# Theta* plot
+tstar.95 <- 4 # number of samples needed for detection to exceed 95%
+tstar.80 <- 2 #80% 
+tstar.50 <- 1 #50%
+
+tstar.plot50<- ggplot(data=tstar.df50, aes(x=samples, y=tstar))+
+  geom_ribbon(aes(x=samples,ymin=`lower`, ymax=`upper`),fill="gray", alpha=.6)+
+  geom_line(linewidth=1)+
+  geom_vline(xintercept=tstar.80, color='gray10', linetype="dashed", linewidth=0.8)+
+  ylab(expression("Cumulative availability probability (" ~ theta ~ "*)")) +
+  xlab("Number of 1-L eDNA samples")+
+  theme_classic()+
+  theme(text = element_text(size = 20)) +
+  coord_cartesian(ylim = c(0.1,1), xlim = c(1,10)) +
+  annotate("text", x = Inf, y = Inf, label = paste("A"), vjust = 24, hjust = 1.5, size = 8)
+tstar.plot50
+```
+
+```{r, include=FALSE}
+# Save plots
+png(filename="./pstar_thetastar_cq50.png", width = 1200, height = 500)
+grid.arrange(tstar.plot50, pstar.plot50, nrow = 1)
+dev.off()
+```
+
