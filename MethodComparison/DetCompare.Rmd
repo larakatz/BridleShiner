@@ -1,0 +1,536 @@
+---
+title: "Seine & eDNA detection probability comparison"
+author: "Lara Katz"
+date: "2024-01-03"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load libraries:
+```{r}
+library(emdbook)
+library(ggplot2)
+library(gridExtra)
+library(R2WinBUGS) 
+library(tidyverse)
+```
+
+**Install WinBUGS before continuing**
+
+# Seine survey occupancy 
+
+Bring in seine capture data:
+```{r}
+seine <- read.csv("./occu_seine.csv", header = TRUE)
+seine$Waterbody <- as.factor(seine$Waterbody)
+seine$Site.No <- as.factor(seine$Site.No)
+```
+
+Pivot seine haul values to create input csv files for the occupancy model. Each seine haul will have a separate csv:
+```{r}
+rep.cols <- c("s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8")
+
+for (i in 1:length(rep.cols)){
+occu.seine <- seine %>% select(Waterbody, Site.No, rep.cols[i]) %>% 
+  pivot_wider(., names_from = Site.No, values_from = rep.cols[i]) %>% 
+  arrange(Waterbody)
+colnames(occu.seine) <- c("","Site1","Site2","Site3","Site4")
+write.csv(occu.seine, paste0(paste0("./seine_rep", i), "_detcompare.csv"), row.names = FALSE)
+}
+```
+
+Import seine data (split by seine haul):
+```{r}
+haul1 <- read.csv("./seine_rep1_detcompare.csv", header=TRUE, row.names = 1) 
+haul2 <- read.csv("./seine_rep2_detcompare.csv", header=TRUE, row.names = 1)  
+haul3 <- read.csv("./seine_rep3_detcompare.csv", header=TRUE, row.names = 1)  
+haul4 <- read.csv("./seine_rep4_detcompare.csv", header=TRUE, row.names = 1) 
+haul5 <- read.csv("./seine_rep5_detcompare.csv", header=TRUE, row.names = 1)
+haul6 <- read.csv("./seine_rep6_detcompare.csv", header=TRUE, row.names = 1) 
+haul7 <- read.csv("./seine_rep7_detcompare.csv", header=TRUE, row.names = 1) 
+haul8 <- read.csv("./seine_rep8_detcompare.csv", header=TRUE, row.names = 1) 
+```
+
+Create empty array of 8, 29x4 matrices:
+```{r}
+A <- array(as.numeric(NA), dim = c(29,4,8))
+```
+
+Fill array with seine data. Array dimensions are [1:29 (waterbodies), 1:4 (sites), 1:8 (seine hauls)]:
+```{r}
+A[,,1]<-as.matrix(haul1)
+A[,,2]<-as.matrix(haul2) 
+A[,,3]<-as.matrix(haul3) 
+A[,,4]<-as.matrix(haul4) 
+A[,,5]<-as.matrix(haul5)
+A[,,6]<-as.matrix(haul6) 
+A[,,7]<-as.matrix(haul7) 
+A[,,8]<-as.matrix(haul8)
+
+y <- A
+```
+
+## WinBUGS model
+
+Format data for WinBUGS:
+```{r}
+str( win.data <- list(y = y, # data used to fill array
+                      n.wb = dim(y)[1], # number of rows = number of waterbodies (29)
+                      n.site = dim(y)[2], # number of columns = number of sites/waterbody (up to 4)
+                      n.haul = dim(y)[3] )) # number of water sample replicates (up to 5)
+```
+
+Define model in BUGS language:
+```{r}
+sink("seine.model.txt") 
+
+cat("
+model{
+# Priors and model for params 
+  int.psi ~ dunif(0,1) # Intercept of occupancy probability (waterbodies) 
+  for(t in 1:n.site){ 
+      int.theta[t] ~ dunif(0,1)} # Intercepts of availability probability per site replicate
+                             
+  for(t in 1:n.haul){ 
+      int.p[t] ~ dunif(0,1)}  # Intercepts of detection probability (1-replicate error)
+      
+# 'Likelihood' (or basic model structure)
+  
+  ## Occurrence in waterbody i 
+  for(i in 1:n.wb){ 
+      z[i] ~ dbern(psi[i]) 
+      logit(psi[i]) <- logit(int.psi) 
+      
+      ## Occurrence in site j 
+      for(j in 1:n.site){ 
+          a[i,j] ~ dbern(mu.a[i,j])
+          mu.a[i,j] <- z[i] * theta[i,j]
+          logit(theta[i,j]) <- logit(int.theta[j])
+  
+          ## Detection error process in seine haul k 
+          for (k in 1:n.haul){ 
+               y[i,j,k] ~ dbern(mu.y[i,j,k]) 
+               mu.y[i,j,k] <- a[i,j] * p[i,j,k] 
+               logit(p[i,j,k]) <- logit(int.p[k])
+                            }
+                          }
+                tmp[i] <- step(sum(a[i,])-0.1) 
+                        }
+
+# Derived quantities 
+sum.z <- sum(z[]) # Total number of occupied waterbodies 
+sum.a <- sum(tmp[]) # Total number of sites with presence 
+mean.p <- mean(int.p[]) # mean p across seine haul replicates 
+mean.theta <- mean(int.theta[]) # mean theta across site replicates 
+
+} # end model 
+",fill=TRUE)
+
+sink()
+```
+
+Initial values:
+```{r}
+zst <- apply(y, 1, max) # inits for presence (z) 
+ast <- apply(y, c(1,2), max) # inits for availability (a): applies the "max" function to all matrix rows and columns in the array
+inits <- function() list(z = zst, a = ast, int.psi = 0.5)
+```
+
+Parameters:
+```{r}
+params <- c("int.psi", "int.theta", "int.p", "sum.z", "sum.a", "mean.p","mean.theta", "z") 
+```
+
+MCMC settings: 
+```{r}
+ni <- 25000 ; nt <- 10 ; nb <- 2000 ; nc <- 3
+```
+
+Call WinBUGS and summarize posterior:
+```{r, cache=TRUE}
+bd <- "C:/Program Files/winbugs14_full_patched/WinBUGS14" # Location of WinBUGS
+
+seine.out <- bugs(win.data, inits, params, "seine.model.txt", 
+                 n.chains = nc, n.thin = nt, 
+                 n.iter = ni, n.burnin = nb, 
+                 debug = TRUE, bugs.seed = 42,
+                 bugs.dir = bd)
+
+print(seine.out, 4)
+```
+
+```{r}
+z.summary.seine <- as.data.frame(cbind(rownames(haul1), seine.out$mean$z, seine.out$sd$z))
+colnames(z.summary.seine) <- c("Waterbody", "Psi.est", "sd")
+z.summary.seine
+min(z.summary.seine$Psi.est)
+```
+
+# Calculate p-star and theta-star (code from Erik Blomberg)
+
+Calculate p*:
+```{r}
+hauls <- read.csv("./Number_samples_per_site.csv", header = TRUE)
+mean.hauls <- mean(hauls$No.hauls)
+sd.hauls <- sd(hauls$No.hauls)
+mean.hauls - sd.hauls*1.96
+
+no.hauls <- c(mean.hauls,seq(1,10,1)) # 1-10 seine hauls
+
+pstar.seine <- 1-((1-seine.out$mean$mean.p)^no.hauls)
+
+sigma.p.seine <- matrix(c(seine.out$sd$mean.p^2,0, 
+                  0,0), nrow=2)
+
+pstar.se.seine <- vector(length=length(pstar.seine)) 
+
+for (i in 1:length(no.hauls)){
+  pstar.se.seine[i]<- sqrt(deltavar(1-((1-x)^y),
+                              meanval = c(x=seine.out$mean$mean.p, y=no.hauls[i]),
+                              Sigma=sigma.p.seine)) }
+
+pstar.df.seine <- data.frame(hauls=no.hauls, pstar = pstar.seine, se=pstar.se.seine)
+```
+
+95% Confidence Intervals:
+```{r}
+pstar.df.seine$lower <- pstar.df.seine$pstar - pstar.df.seine$se*1.96
+pstar.df.seine$upper <- pstar.df.seine$pstar + pstar.df.seine$se*1.96
+pstar.df.seine$upper[pstar.df.seine$upper > 1] <- 1
+write.csv(pstar.df.seine, "./pstar_seine.csv")
+pstar.df.seine
+```
+
+Pstar plot:
+```{r}
+pstar.95 <- 6 # number of seine hauls needed for detection to exceed 95%
+pstar.80 <- 3 #80% 
+pstar.50 <- 2 #50%
+
+pstar.plot.seine <- ggplot(data=pstar.df.seine, aes(x=hauls, y=pstar))+
+  geom_ribbon(aes(x=hauls,ymin=`lower`, ymax=`upper`),fill="gray", alpha=.6)+
+  geom_line(linewidth=1)+
+  geom_vline(xintercept=pstar.80, color='gray10', linetype="dashed", linewidth=0.8)+
+  ylab("Cumulative detection probability (p*)")+
+  xlab("Number of seine net hauls per site")+
+  theme_classic()+
+  theme(text = element_text(size = 20)) +
+  coord_cartesian(ylim = c(0.1,1), xlim = c(1,10)) +
+  annotate("text", x = Inf, y = Inf, label = paste("D"), vjust = 24, hjust = 1.5, size = 8)
+pstar.plot.seine
+```
+
+Calculate theta*:
+```{r}
+sites.no <- read.csv("./Number_sites_per_waterbody.csv", header = TRUE)
+mean.sites <- mean(sites.no$No.sites)
+
+no.sites <- c(mean.sites, seq(1,10,1)) # Number of site replicates
+
+tstar.seine <- 1-((1-seine.out$mean$mean.theta)^no.sites)
+
+sigma.seine.t <- matrix(c(seine.out$sd$mean.theta^2,0, 
+                  0,0), nrow=2)
+
+tstar.se.seine <- vector(length=length(tstar.seine))
+
+for (i in 1:length(no.sites)){
+    tstar.se.seine[i]<- sqrt(deltavar(1-((1-x)^y),
+                       meanval = c(x=seine.out$mean$mean.theta, y=no.sites[i]),
+                       Sigma=sigma.seine.t)) }
+
+tstar.df.seine <- data.frame(sites=no.sites, tstar = tstar.seine, se=tstar.se.seine)
+```
+
+95% confidence intervals:
+```{r}
+tstar.df.seine$lower <- tstar.df.seine$tstar - tstar.df.seine$se*1.96
+tstar.df.seine$upper <- tstar.df.seine$tstar + tstar.df.seine$se*1.96
+tstar.df.seine$upper[tstar.df.seine$upper > 1] <- 1
+write.csv(tstar.df.seine, "./thetastar_seine.csv")
+tstar.df.seine
+```
+
+Theta* plot:
+```{r}
+tstar.95 <- 5 # number of sites needed for detection to exceed 95%
+tstar.80 <- 3 #80% 
+tstar.50 <- 2 #50%
+
+tstar.plot.seine<- ggplot(data=tstar.df.seine, aes(x=sites, y=tstar.seine))+
+  geom_ribbon(aes(x=sites,ymin=`lower`, ymax=`upper`),fill="gray", alpha=.6)+
+  geom_line(linewidth=1)+
+  geom_vline(xintercept=tstar.80, color='gray10', linetype="dashed", linewidth=0.8)+
+  ylab(expression("Cumulative availability probability (" ~ theta ~ "*)")) +
+  xlab("Number of sites per waterbody (seine)")+
+  theme_classic()+
+  theme(text = element_text(size = 20)) +
+  coord_cartesian(ylim = c(0.1,1), xlim = c(1,10)) +
+  annotate("text", x = Inf, y = Inf, label = paste("C"), vjust = 24, hjust = 1.5, size = 8)
+tstar.plot.seine
+```
+
+# eDNA survey occupancy (presence threshold: Cq = 50)
+
+Bring in eDNA data:
+```{r}
+edna <- read.csv("./occu_edna_cq50.csv", header = TRUE)
+edna$Replicate <- as.factor(edna$Replicate)
+edna$Waterbody <- as.factor(edna$Waterbody)
+edna$Site.No <- as.factor(edna$Site.No)
+```
+
+Pivot
+```{r}
+edna.wide <- edna %>% pivot_wider(., names_from = Replicate, values_from = all_cq)
+edna.wide
+```
+
+Pivot water sample replicate values to create input csv files for the occupancy model. Each sample replicate will have a separate csv:
+```{r}
+rep.cols <- c("R1", "R2", "R3", "R4", "R5")
+
+for (i in 1:length(rep.cols)){
+occu.edna <- edna.wide %>% select(Waterbody, Site.No, rep.cols[i]) %>% 
+  pivot_wider(., names_from = Site.No, values_from = rep.cols[i]) %>% 
+  arrange(Waterbody)
+colnames(occu.edna) <- c("","Site1","Site2","Site3","Site4")
+write.csv(occu.edna, paste0(paste0("./edna_rep", i), "_detcompare_cq50.csv"), row.names = FALSE)
+}
+```
+
+Import eDNA data (split by water sample replicate). Most samples have 2 replicates:
+```{r}
+rep1 <- read.csv("./edna_rep1_detcompare_cq50.csv", header=TRUE, row.names = 1) 
+rep2 <- read.csv("./edna_rep2_detcompare_cq50.csv", header=TRUE, row.names = 1)  
+rep3 <- read.csv("./edna_rep3_detcompare_cq50.csv", header=TRUE, row.names = 1)  
+rep4 <- read.csv("./edna_rep4_detcompare_cq50.csv", header=TRUE, row.names = 1) 
+rep5 <- read.csv("./edna_rep5_detcompare_cq50.csv", header=TRUE, row.names = 1) 
+```
+
+Create empty array of 5, 29x4 matrices:
+```{r}
+B <- array(as.numeric(NA), dim = c(29,4,5))
+```
+
+Fill array with eDNA data. Array dimensions are [1:29 (waterbodies), 1:4 (sites), 1:5 (water sample replicates)]:
+```{r}
+B[,,1]<-as.matrix(rep1)
+B[,,2]<-as.matrix(rep2) 
+B[,,3]<-as.matrix(rep3) 
+B[,,4]<-as.matrix(rep4) 
+B[,,5]<-as.matrix(rep5)
+```
+
+## WinBUGS model
+
+Format data for WinBUGS:
+```{r}
+str( win.data <- list(y = B, # data used to fill array
+                      n.wb = dim(B)[1], # number of rows = number of waterbodies (29)
+                      n.site = dim(B)[2], # number of columns = number of sites/waterbody (up to 4)
+                      n.rep = dim(B)[3] )) # number of water sample replicates (up to 5)
+```
+
+Define model in BUGS language:
+```{r}
+sink("eDNA.model.txt") 
+
+cat("
+model{
+# Priors and model for params 
+  int.psi ~ dunif(0,1) # Intercept of occupancy probability (waterbodies) 
+  for(t in 1:n.site){ 
+      int.theta[t] ~ dunif(0,1)} # Intercepts of availability probability per site replicate
+                             
+  for(t in 1:n.rep){ 
+      int.p[t] ~ dunif(0,1)}  # Intercepts of detection probability (1-replicate error)
+      
+# 'Likelihood' (or basic model structure)
+  
+  ## Occurrence in waterbody i 
+  for(i in 1:n.wb){ 
+      z[i] ~ dbern(psi[i])
+      logit(psi[i]) <- logit(int.psi) 
+      
+      ## Occurrence in site j 
+      for(j in 1:n.site){ 
+          a[i,j] ~ dbern(mu.a[i,j])
+          mu.a[i,j] <- z[i] * theta[i,j]
+          logit(theta[i,j]) <- logit(int.theta[j])
+  
+          ## Detection error process in replicate k 
+          for (k in 1:n.rep){ 
+               y[i,j,k] ~ dbern(mu.y[i,j,k]) 
+               mu.y[i,j,k] <- a[i,j] * p[i,j,k] 
+               logit(p[i,j,k]) <- logit(int.p[k])
+                            }
+                          }
+                tmp[i] <- step(sum(a[i,])-0.1) 
+                        }
+
+# Derived quantities 
+sum.z <- sum(z[]) # Total number of occupied waterbodies 
+sum.a <- sum(tmp[]) # Total number of sites with presence 
+mean.p <- mean(int.p[]) # mean p across water sample replicates 
+mean.theta <- mean(int.theta[]) # mean theta across site replicates 
+
+} # end model 
+",fill=TRUE)
+
+sink()
+```
+
+Initial values:
+```{r}
+zst <- apply(B, 1, max) # inits for presence (z) 
+ast <- apply(B, c(1,2), max) # inits for availability (a): applies the "max" function to all matrix rows and columns in the array
+inits <- function() list(z = zst, a = ast, int.psi = 0.5)
+```
+
+Parameters:
+```{r}
+params <- c("int.psi", "int.theta", "int.p", "sum.z", "sum.a", "mean.p","mean.theta", "z") 
+```
+
+MCMC settings: 
+```{r}
+ni <- 25000 ; nt <- 10 ; nb <- 2000 ; nc <- 3
+```
+
+Call WinBUGS and summarize posterior:
+```{r, cache=TRUE}
+bd <- "C:/Program Files/winbugs14_full_patched/WinBUGS14" # Location of WinBUGS
+
+eDNA.out <- bugs(win.data, inits, params, "eDNA.model.txt", 
+                 n.chains = nc, n.thin = nt, 
+                 n.iter = ni, n.burnin = nb, 
+                 debug = TRUE, bugs.seed = 42,
+                 bugs.dir = bd)
+
+print(eDNA.out, 4)
+```
+
+```{r}
+z.summary.edna <- as.data.frame(cbind(rownames(rep1), eDNA.out$mean$z, eDNA.out$sd$z))
+colnames(z.summary.edna) <- c("Waterbody", "Psi.est", "sd")
+z.summary.edna
+```
+
+# Calculate p-star and theta-star (code from Erik Blomberg)
+
+Calculate p*:
+```{r}
+samples <- read.csv("./Number_samples_per_site.csv", header = TRUE)
+mean.samples <- mean(samples$No.eDNA)
+sd.samples <- sd(samples$No.eDNA)
+mean.samples - sd.samples*1.96
+
+
+no.reps <- c(mean.samples, seq(1,10,1)) # 1-10 water sample replicates
+
+pstar.edna <- 1-((1-eDNA.out$mean$mean.p)^no.reps)
+
+sigma.p.edna <- matrix(c(eDNA.out$sd$mean.p^2,0, 
+                  0,0), nrow=2)
+
+pstar.se.edna <- vector(length=length(pstar.edna)) 
+
+for (i in 1:length(no.reps)){
+  pstar.se.edna[i]<- sqrt(deltavar(1-((1-x)^y),
+                              meanval = c(x=eDNA.out$mean$mean.p, y=no.reps[i]),
+                              Sigma=sigma.p.edna)) }
+
+pstar.df.edna <- data.frame(rep=no.reps, pstar = pstar.edna, se=pstar.se.edna)
+```
+
+95% Confidence Intervals:
+```{r}
+pstar.df.edna$lower <- pstar.df.edna$pstar - pstar.df.edna$se*1.96
+pstar.df.edna$upper <- pstar.df.edna$pstar + pstar.df.edna$se*1.96
+pstar.df.edna$upper[pstar.df.edna$upper > 1] <- 1
+write.csv(pstar.df.edna, "./pstar_edna_cq50.csv")
+pstar.df.edna
+```
+
+Pstar plot:
+```{r}
+pstar.95 <- 5 # number of samples needed for detection to exceed 95%
+pstar.80 <- 3 #80% 
+pstar.50 <- 2 #50%
+
+pstar.plot.edna <- ggplot(data=pstar.df.edna, aes(x=rep, y=pstar))+
+  geom_ribbon(aes(x=rep,ymin=`lower`, ymax=`upper`),fill="gray", alpha=.6)+
+  geom_line(linewidth=1)+
+  geom_vline(xintercept=pstar.80, color='gray10', linetype="dashed", linewidth=0.8)+
+  ylab("Cumulative detection probability (p*)")+
+  xlab("Number of 1-L eDNA samples per site")+
+  theme_classic()+
+  theme(text = element_text(size = 20)) +
+  coord_cartesian(ylim = c(0.1,1), xlim = c(1,10)) +
+  annotate("text", x = Inf, y = Inf, label = paste("B"), vjust = 24, hjust = 1.5, size = 8)
+pstar.plot.edna
+```
+
+Calculate theta*:
+```{r}
+sites.no <- read.csv("./Number_sites_per_waterbody.csv", header = TRUE)
+mean.sites <- mean(sites.no$No.sites)
+se.sites <- sd(sites.no$No.sites)
+mean.sites + se.sites*1.96
+
+
+no.sites <- c(mean.sites, seq(1,10,1)) # Number of site replicates
+
+tstar.edna <- 1-((1-eDNA.out$mean$mean.theta)^no.sites)
+
+sigma.edna.t <- matrix(c(eDNA.out$sd$mean.theta^2,0, 
+                  0,0), nrow=2)
+
+tstar.se.edna <- vector(length=length(tstar.edna))
+
+for (i in 1:length(no.sites)){
+    tstar.se.edna[i]<- sqrt(deltavar(1-((1-x)^y),
+                       meanval = c(x=eDNA.out$mean$mean.theta, y=no.sites[i]),
+                       Sigma=sigma.edna.t)) }
+
+tstar.df.edna <- data.frame(sites=no.sites, tstar = tstar.edna, se=tstar.se.edna)
+```
+
+95% confidence intervals:
+```{r}
+tstar.df.edna$lower <- tstar.df.edna$tstar - tstar.df.edna$se*1.96
+tstar.df.edna$upper <- tstar.df.edna$tstar + tstar.df.edna$se*1.96
+tstar.df.edna$upper[tstar.df.edna$upper > 1] <- 1
+write.csv(tstar.df.edna, "./thetastar_edna_cq50.csv")
+tstar.df.edna
+```
+
+Theta* plot:
+```{r}
+tstar.95 <- 5 # number of samples needed for detection to exceed 95%
+tstar.80 <- 3 #80% 
+tstar.50 <- 1 #50%
+
+tstar.plot.edna<- ggplot(data=tstar.df.edna, aes(x=sites, y=tstar.edna))+
+  geom_ribbon(aes(x=sites,ymin=`lower`, ymax=`upper`),fill="gray", alpha=.6)+
+  geom_line(linewidth=1)+
+  geom_vline(xintercept=tstar.80, color='gray10', linetype="dashed", linewidth=0.8)+
+  ylab(expression("Cumulative availability probability (" ~ theta ~ "*)")) +
+  xlab("Number of sites per waterbody (eDNA)")+
+  theme_classic()+
+  theme(text = element_text(size = 20)) +
+  coord_cartesian(ylim = c(0.1,1), xlim = c(1,10)) +
+  annotate("text", x = Inf, y = Inf, label = paste("A"), vjust = 24, hjust = 1.5, size = 8)
+tstar.plot.edna
+```
+
+Save plots:
+```{r, }
+png(filename="./detcompare.png", width = 1200, height = 1000)
+grid.arrange(tstar.plot.edna, pstar.plot.edna, tstar.plot.seine, pstar.plot.seine, nrow = 2)
+dev.off()
+```
