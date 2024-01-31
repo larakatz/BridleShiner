@@ -1,0 +1,142 @@
+---
+title: "Supplement B. Community composition"
+author: "Lara Katz"
+date: "2024-01-31"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=FALSE}
+library(vegan)
+library(pracma)
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+```
+
+Read in species matrix and grouping variables:
+```{r}
+comm <- read.csv("./CPUE_2021_bySite.csv", header = TRUE, row.names = 1)
+```
+
+Remove waterbody with no fish captured (GWORKN):
+```{r}
+comm <- comm[-8,]
+rownames(comm)
+```
+
+Read in grouping data:
+```{r}
+comm_groups <- read.csv("./nmds_groups.csv", row.names = 1)
+comm_groups$BDS.pres <- as.factor(comm_groups$BDS.pres) # Bridle Shiner presence
+# comm_groups$Size <- as.factor(comm_groups$Size) # waterbody size/catchment position
+```
+
+Fourth-root transformation of catch per unit effort (CPUE) values:
+```{r}
+df <- data.frame(matrix(ncol = 26, nrow = 28))
+colnames(df) <- colnames(comm)
+row.names(df) <- rownames(comm)
+
+for (i in 1:ncol(comm)){
+  df[,i] <- nthroot(comm[,i], 4)
+}
+```
+
+Calculate distance matrix and save to csv:
+```{r}
+comm.distmat <- as.matrix(vegdist(df, method = "bray"), labels = TRUE)
+write.csv(comm.distmat, "./community_distmat.csv")
+```
+
+Run NMDS in `vegan` using the `metaMDS` function:
+```{r}
+set.seed(42)
+comm_NMDS <- metaMDS(df, distance = "bray", 
+                     k = 3, maxit = 999, 
+                     trymax = 500, 
+                     wascores = TRUE,
+                     tidy = TRUE)
+```
+
+As a rule of thumb literature has identified the following cut-off values for stress-level:
+
+-   Higher than 0.2 is poor (risks for false interpretation).
+-   0.1 - 0.2 is fair (some distances can be misleading for interpretation).
+-   0.05 - 0.1 is good (can be confident in inferences from plot).
+-   Less than 0.05 is excellent (this can be rare).
+
+Save species scores:
+```{r}
+scores <- as.data.frame(comm_NMDS$species)
+```
+
+Shepards test/goodness of fit:
+```{r}
+goodness(comm_NMDS) # Produces a result of test statistics for goodness of fit for each point
+
+stressplot(comm_NMDS) # Produces a Shepards diagram
+```
+
+Plotting points in ordination space:
+```{r}
+plot(comm_NMDS, "sites")   # Produces distance 
+orditorp(comm_NMDS, "sites")   # Label points
+```
+
+Plot waterbodies and species along NMDS axes:
+```{r, fig.height=5, fig.width=12}
+#png("./NMDSplots.png", width = 1050)
+par(mfrow = c(1,2)) 
+p1 <- ordiplot(ord = comm_NMDS, 
+               choices = c(1,2), 
+               type = "none", 
+               display = c("sites", "species"))
+text(p1, "sites", col = "black", cex = 1)
+ordiellipse(comm_NMDS, comm_groups$BDS.pres, 
+            display = "sites", 
+            draw = "polygon", 
+            label = F, kind = "ehull")
+abline(h = 0, lty = 3)
+abline(v = 0, lty = 3)
+mtext("A", side = 1, adj = 1, line = -1.5, at = 2.4, cex = 2)
+
+p2 <- ordiplot(ord = comm_NMDS, 
+               choices = c(1,2), 
+               type = "none", 
+               display = c("sites", "species"))
+text(p2, "species", col = "black", cex = 1)
+ordiellipse(comm_NMDS, comm_groups$BDS.pres,
+            display = "sites", 
+            draw = "polygon", 
+            label = F, kind = "ehull")
+abline(h = 0, lty = 3)
+abline(v = 0, lty = 3)
+mtext("B", side = 1, adj = 1, line = -1.5, at = 2.4, cex = 2)
+#dev.off()
+```
+
+Use `envfit` to determine which species were the intrinsic drivers of the waterbody distribution pattern:
+```{r}
+spp.fit <- envfit(comm_NMDS, df, permutations = 999)
+head(spp.fit)
+```
+
+Plot intrinsic species:
+```{r}
+#png("./IntrinsicSpp.png")
+ordiplot(comm_NMDS, type = "n")
+orditorp(comm_NMDS, display = "sites", labels = T,
+         #pch = c(1,16)[comm_groups$BDS.pres], 
+         cex = 1)
+plot(spp.fit, 
+     p.max = 0.05, # change the significance level of species shown
+     col = "black", 
+     cex = 1) 
+abline(h = 0, lty = 3)
+abline(v = 0, lty = 3)
+#dev.off()
+```
