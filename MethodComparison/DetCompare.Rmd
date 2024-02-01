@@ -530,7 +530,8 @@ tstar.plot.edna
 
 Save plots:
 ```{r, }
-png(filename="./detcompare.png", width = 1200, height = 1000)
-grid.arrange(tstar.plot.edna, pstar.plot.edna, tstar.plot.seine, pstar.plot.seine, nrow = 2)
-dev.off()
+#png(filename="./detcompare.png", width = 1200, height = 1000)
+ggsave <- grid.arrange(tstar.plot.edna, pstar.plot.edna, tstar.plot.seine, pstar.plot.seine, nrow = 2)
+ggsave(filename = "./detcompare.png", plot = ggsave, width = 12.6, height = 12.6, dpi = 600)
+#dev.off()
 ```
