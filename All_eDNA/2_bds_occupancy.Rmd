@@ -479,8 +479,10 @@ tstar.plot50
 
 ```{r, include=FALSE}
 # Save plots
-png(filename="./pstar_thetastar_cq50.png", width = 1200, height = 500)
-grid.arrange(tstar.plot50, pstar.plot50, nrow = 1)
-dev.off()
+#png(filename="./pstar_thetastar_cq50.png", width = 1200, height = 500)
+ggsave <- grid.arrange(tstar.plot50, pstar.plot50, nrow = 1)
+ggsave(filename = "./pstar_thetastar_cq50.png", 
+       plot = ggsave, width = 12.6, height = 6.3, dpi = 600)
+#dev.off()
 ```
 
