@@ -360,6 +360,7 @@ params <- c("int.psi", "int.theta", "int.p", "sum.z", "sum.a", "mean.p","mean.th
 MCMC settings: 
 ```{r}
 ni <- 25000 ; nt <- 10 ; nb <- 2000 ; nc <- 3
+# ni <- 50000 ; nt <- 5 ; nb <- 2000 ; nc <- 3
 ```
 
 Call WinBUGS and summarize posterior:
