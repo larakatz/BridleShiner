@@ -160,10 +160,12 @@ seine.out <- bugs(win.data, inits, params, "seine.model.txt",
                  debug = TRUE, bugs.seed = 42,
                  bugs.dir = bd)
 
+saveRDS(seine.out, "./seine_out.RDS")
 print(seine.out, 4)
 ```
 
 ```{r}
+seine.out <- readRDS("./seine_out.RDS")
 z.summary.seine <- as.data.frame(cbind(rownames(haul1), seine.out$mean$z, seine.out$sd$z))
 colnames(z.summary.seine) <- c("Waterbody", "Psi.est", "sd")
 z.summary.seine
@@ -220,7 +222,7 @@ pstar.plot.seine <- ggplot(data=pstar.df.seine, aes(x=hauls, y=pstar))+
   theme_classic()+
   theme(text = element_text(size = 20)) +
   coord_cartesian(ylim = c(0.1,1), xlim = c(1,10)) +
-  annotate("text", x = Inf, y = Inf, label = paste("D"), vjust = 24, hjust = 1.5, size = 8)
+  annotate("text", x = Inf, y = Inf, label = paste("D"), vjust = 22.5, hjust = 1.5, size = 8)
 pstar.plot.seine
 ```
 
@@ -270,7 +272,7 @@ tstar.plot.seine<- ggplot(data=tstar.df.seine, aes(x=sites, y=tstar.seine))+
   theme_classic()+
   theme(text = element_text(size = 20)) +
   coord_cartesian(ylim = c(0.1,1), xlim = c(1,10)) +
-  annotate("text", x = Inf, y = Inf, label = paste("C"), vjust = 24, hjust = 1.5, size = 8)
+  annotate("text", x = Inf, y = Inf, label = paste("C"), vjust = 22.5, hjust = 1.5, size = 8)
 tstar.plot.seine
 ```
 
@@ -411,11 +413,12 @@ eDNA.out <- bugs(win.data, inits, params, "eDNA.model.txt",
                  n.iter = ni, n.burnin = nb, 
                  debug = TRUE, bugs.seed = 42,
                  bugs.dir = bd)
-
+saveRDS(eDNA.out, "./eDNA_out.RDS")
 print(eDNA.out, 4)
 ```
 
 ```{r}
+eDNA.out <- readRDS("./eDNA_out.RDS")
 z.summary.edna <- as.data.frame(cbind(rownames(rep1), eDNA.out$mean$z, eDNA.out$sd$z))
 colnames(z.summary.edna) <- c("Waterbody", "Psi.est", "sd")
 z.summary.edna
@@ -472,7 +475,7 @@ pstar.plot.edna <- ggplot(data=pstar.df.edna, aes(x=rep, y=pstar))+
   theme_classic()+
   theme(text = element_text(size = 20)) +
   coord_cartesian(ylim = c(0.1,1), xlim = c(1,10)) +
-  annotate("text", x = Inf, y = Inf, label = paste("B"), vjust = 24, hjust = 1.5, size = 8)
+  annotate("text", x = Inf, y = Inf, label = paste("B"), vjust = 22.5, hjust = 1.5, size = 8)
 pstar.plot.edna
 ```
 
@@ -525,7 +528,7 @@ tstar.plot.edna<- ggplot(data=tstar.df.edna, aes(x=sites, y=tstar.edna))+
   theme_classic()+
   theme(text = element_text(size = 20)) +
   coord_cartesian(ylim = c(0.1,1), xlim = c(1,10)) +
-  annotate("text", x = Inf, y = Inf, label = paste("A"), vjust = 24, hjust = 1.5, size = 8)
+  annotate("text", x = Inf, y = Inf, label = paste("A"), vjust = 22.5, hjust = 1.5, size = 8)
 tstar.plot.edna
 ```
 
@@ -533,6 +536,7 @@ Save plots:
 ```{r, }
 #png(filename="./detcompare.png", width = 1200, height = 1000)
 ggsave <- grid.arrange(tstar.plot.edna, pstar.plot.edna, tstar.plot.seine, pstar.plot.seine, nrow = 2)
-ggsave(filename = "./detcompare.png", plot = ggsave, width = 12.6, height = 12.6, dpi = 600)
+ggsave(filename = "09_cjfas-2023-0234.R2_Figure5.jpg", plot = ggsave, width = 13, height = 12, units = "in", device = "jpeg", dpi =500)
+?ggsave
 #dev.off()
 ```
