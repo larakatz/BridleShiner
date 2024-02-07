@@ -15,6 +15,8 @@ library(pracma)
 library(ggplot2)
 library(dplyr)
 library(gridExtra)
+library(scatterplot3d)
+library(vegan3d)
 ```
 
 Read in species matrix and grouping variables:
@@ -86,6 +88,11 @@ Plotting points in ordination space:
 plot(comm_NMDS, "sites")   # Produces distance 
 orditorp(comm_NMDS, "sites")   # Label points
 ```
+```{r}
+out <- ordiplot3d(comm_NMDS, col = "red", ax.col= "black", pch = 18)
+#text(out$xyz.convert(comm_NMDS), rownames(comm_NDMS), pos=1)
+```
+
 
 Plot waterbodies and species along NMDS axes:
 ```{r, fig.height=5, fig.width=12}
