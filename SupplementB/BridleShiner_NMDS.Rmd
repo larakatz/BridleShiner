@@ -17,6 +17,7 @@ library(dplyr)
 library(gridExtra)
 library(scatterplot3d)
 library(vegan3d)
+library(labdsv)
 ```
 
 Read in species matrix and grouping variables:
@@ -54,14 +55,122 @@ comm.distmat <- as.matrix(vegdist(df, method = "bray"), labels = TRUE)
 write.csv(comm.distmat, "./community_distmat.csv")
 ```
 
+# NMDS with two axes
+
+```{r}
+set.seed(42)
+comm_NMDS <- metaMDS(df, distance = "bray", 
+                     k = 2, try = 500, trymax = 600,
+                     wascores = TRUE,
+                     tidy = TRUE)
+comm_NMDS
+```
+
+Shepards test/goodness of fit:
+```{r}
+jpeg("./ShepardPlot.jpg", width = 900, height = 600, res = 100)
+stressplot(comm_NMDS) # Produces a Shepards diagram
+dev.off()
+```
+
+Plot waterbodies and species:
+```{r, fig.height=5, fig.width=12}
+#png("./NMDSplots.png", width = 1000)
+par(mfrow = c(1,2))
+p1 <- ordiplot(ord = comm_NMDS,
+               choices = c(1,2),
+               type = "none",
+               display = c("sites", "species"))
+text(p1, "sites", col = "black")
+ordiellipse(comm_NMDS, comm_groups$BDS.pres,
+            display = "sites",
+            draw = "polygon",
+            col = c("red", "blue"),
+            label = F, kind = "se", alpha = 80, conf = 0.95)
+abline(h = 0, lty = 3)
+abline(v = 0, lty = 3)
+mtext("A", side = 1, adj = 1, line = -1.5, at = 1.8, cex = 2)
+
+p2 <- ordiplot(ord = comm_NMDS,
+               choices = c(1,2),
+               type = "none",
+               display = c("sites", "species"))
+text(p2, "species", col = "black")
+ordiellipse(comm_NMDS, comm_groups$BDS.pres,
+            display = "sites",
+            draw = "polygon",
+            col = c("red", "blue"),
+            label = F, kind = "se", alpha = 80, conf = 0.95)
+abline(h = 0, lty = 3)
+abline(v = 0, lty = 3)
+mtext("B", side = 1, adj = 1, line = -1.5, at = 1.8, cex = 2)
+#dev.off()
+```
+Use `envfit` to determine which species were the intrinsic drivers of the waterbody distribution pattern:
+```{r}
+spp.fit <- envfit(comm_NMDS, df, permutations = 999)
+head(spp.fit)
+```
+
+The `envfit` output contains information on the length of the segments for each variable. The segments are scaled to the r2 value, so that the environmental variables with a longer segment are more strongly correlated with the data than those with a shorter segment. You can extract this information with scores. Then these lengths are further scaled to fit the plot. This is done with a multiplier that is analysis specific, and can be accessed using the command ordiArrowMul(en). Below I multiply the scores by this multiplier to keep the coordinates in the correct proportion.
+```{r}
+env_coord <- as.data.frame(vegan::scores(spp.fit, display = "vectors")) * ordiArrowMul(spp.fit)
+env_coord[order(env_coord$NMDS1),]
+```
+
+Extract manually and limit to species with p-values < 0.05:
+```{r}
+coords <- as.data.frame(cbind(spp.fit$vectors$arrows, spp.fit$vectors$r, spp.fit$vectors$pvals))
+coords[order(coords$V4),]
+
+coords.05 <- coords[coords$V4 < 0.05,]
+coords.05$NMDS1.scale <- coords.05$NMDS1 * sqrt(coords.05$V3) * ordiArrowMul(spp.fit)
+coords.05$NMDS2.scale <- coords.05$NMDS2 * sqrt(coords.05$V3) * ordiArrowMul(spp.fit)
+coords.05
+```
+
+Which species influenced the NMDS1 axis the most?
+```{r}
+rownames(coords.05[which(coords.05$NMDS1.scale == max(coords.05$NMDS1.scale)),])
+max(coords.05$NMDS1.scale) # most + influential
+rownames(coords.05[which(coords.05$NMDS1.scale == min(coords.05$NMDS1.scale)),])
+min(coords.05$NMDS1.scale) # most - influential
+```
+
+Which species influenced the NMDS1 axis the most?
+```{r}
+rownames(coords.05[which(coords.05$NMDS2.scale == max(coords.05$NMDS2.scale)),])
+max(coords.05$NMDS2.scale) # most + influential
+rownames(coords.05[which(coords.05$NMDS2.scale == min(coords.05$NMDS2.scale)),])
+min(coords.05$NMDS2.scale) # most - influential
+```
+
+Plot `envfit` results:
+```{r}
+jpeg("./IntrinsicSpp2d.jpg", width = 600, height = 600, res = 100)
+ordiplot(comm_NMDS, type = "n")
+# orditorp(comm_NMDS, display = "sites", labels = T,
+#          #pch = c(1,16)[comm_groups$BDS.pres], 
+#          cex = 1)
+plot(spp.fit, 
+     p.max = 0.05, # change the significance level of species shown
+     col = "black", 
+     cex = 1) 
+abline(h = 0, lty = 3)
+abline(v = 0, lty = 3)
+dev.off()
+```
+
+# NMDS with three axes
+
 Run NMDS in `vegan` using the `metaMDS` function:
 ```{r}
 set.seed(42)
 comm_NMDS <- metaMDS(df, distance = "bray", 
-                     k = 3, maxit = 999, 
-                     trymax = 500, 
+                     k = 3, try = 500, trymax = 600,
                      wascores = TRUE,
                      tidy = TRUE)
+comm_NMDS
 ```
 
 As a rule of thumb literature has identified the following cut-off values for stress-level:
@@ -78,72 +187,156 @@ scores <- as.data.frame(comm_NMDS$species)
 
 Shepards test/goodness of fit:
 ```{r}
-goodness(comm_NMDS) # Produces a result of test statistics for goodness of fit for each point
-
+#jpeg("./ShepardPlot.jpg", width = 900, height = 600, res = 100)
+par(mfrow= c(1,2))
 stressplot(comm_NMDS) # Produces a Shepards diagram
-```
-
-Plotting points in ordination space:
-```{r}
-plot(comm_NMDS, "sites")   # Produces distance 
-orditorp(comm_NMDS, "sites")   # Label points
-```
-```{r}
-out <- ordiplot3d(comm_NMDS, col = "red", ax.col= "black", pch = 18)
-#text(out$xyz.convert(comm_NMDS), rownames(comm_NDMS), pos=1)
-```
-
-
-Plot waterbodies and species along NMDS axes:
-```{r, fig.height=5, fig.width=12}
-#png("./NMDSplots.png", width = 1050)
-par(mfrow = c(1,2)) 
-p1 <- ordiplot(ord = comm_NMDS, 
-               choices = c(1,2), 
-               type = "none", 
-               display = c("sites", "species"))
-text(p1, "sites", col = "black", cex = 1)
-ordiellipse(comm_NMDS, comm_groups$BDS.pres, 
-            display = "sites", 
-            draw = "polygon", 
-            label = F, kind = "ehull")
-abline(h = 0, lty = 3)
-abline(v = 0, lty = 3)
-mtext("A", side = 1, adj = 1, line = -1.5, at = 2.4, cex = 2)
-
-p2 <- ordiplot(ord = comm_NMDS, 
-               choices = c(1,2), 
-               type = "none", 
-               display = c("sites", "species"))
-text(p2, "species", col = "black", cex = 1)
-ordiellipse(comm_NMDS, comm_groups$BDS.pres,
-            display = "sites", 
-            draw = "polygon", 
-            label = F, kind = "ehull")
-abline(h = 0, lty = 3)
-abline(v = 0, lty = 3)
-mtext("B", side = 1, adj = 1, line = -1.5, at = 2.4, cex = 2)
 #dev.off()
 ```
+Plots of sites (2D, all axes):
+```{r}
+gof <- goodness(comm_NMDS) # Produces a result of test statistics for goodness of fit for each point
+
+jpeg("./nmds2dsites.jpg", width = 2100, height = 600, res = 200)
+
+par(mfrow=c(1,3))
+p1 <- plot(comm_NMDS, type = "n", choices = c(1,2))
+text(p1, "sites", col = "black")
+ordiellipse(comm_NMDS, comm_groups$BDS.pres,
+            choices = c(1,2),
+            display = "sites",
+            col = c("red", "blue"),
+            draw = "polygon", 
+            label = F, kind = "sd")
+#points(comm_NMDS, display = "sites", cex = 2*gof/mean(gof))
+abline(h = 0, lty = 3)
+abline(v = 0, lty = 3)
+
+p2 <- plot(comm_NMDS, type = "n", choices = c(1,3))
+text(p2, "sites", col = "black")
+ordiellipse(comm_NMDS, comm_groups$BDS.pres,
+            choices = c(1,3),
+            display = "sites",
+            col = c("red", "blue"),
+            draw = "polygon", 
+            label = F, kind = "sd")
+abline(h = 0, lty = 3)
+abline(v = 0, lty = 3)
+#points(comm_NMDS, display = "sites", cex = 2*gof/mean(gof))
+
+p3 <- plot(comm_NMDS, type = "n", choices = c(2,3))
+text(p3, "sites", col = "black")
+#points(comm_NMDS, display = "sites", cex = 2*gof/mean(gof))
+ordiellipse(comm_NMDS, comm_groups$BDS.pres,
+            choices = c(2,3),
+            display = "sites", 
+            col = c("red", "blue"),
+            draw = "polygon", 
+            label = F, kind = "sd")
+abline(h = 0, lty = 3)
+abline(v = 0, lty = 3)
+dev.off()
+```
+Plots of species (2D, all axes):
+```{r}
+jpeg("./nmds2dspecies.jpg", width = 2100, height = 600, res = 200)
+
+par(mfrow=c(1,3))
+p1 <- plot(comm_NMDS, type = "n", choices = c(1,2), ylim = c(-1,2))
+text(p1, "species", col = "black")
+ordiellipse(comm_NMDS, comm_groups$BDS.pres,
+            choices = c(1,2),
+            display = "sites",
+            col = c("red", "blue"),
+            draw = "polygon", 
+            label = F, kind = "sd")
+#points(comm_NMDS, display = "sites", cex = 2*gof/mean(gof))
+abline(h = 0, lty = 3)
+abline(v = 0, lty = 3)
+
+p2 <- plot(comm_NMDS, type = "n", choices = c(1,3))
+text(p2, "species", col = "black")
+ordiellipse(comm_NMDS, comm_groups$BDS.pres,
+            choices = c(1,3),
+            display = "sites",
+            col = c("red", "blue"),
+            draw = "polygon", 
+            label = F, kind = "sd")
+abline(h = 0, lty = 3)
+abline(v = 0, lty = 3)
+#points(comm_NMDS, display = "sites", cex = 2*gof/mean(gof))
+
+p3 <- plot(comm_NMDS, type = "n", choices = c(2,3))
+text(p3, "species", col = "black")
+#points(comm_NMDS, display = "sites", cex = 2*gof/mean(gof))
+ordiellipse(comm_NMDS, comm_groups$BDS.pres,
+            choices = c(2,3),
+            display = "sites", 
+            col = c("red", "blue"),
+            draw = "polygon", 
+            label = F, kind = "sd")
+abline(h = 0, lty = 3)
+abline(v = 0, lty = 3)
+dev.off()
+```
+3D plots:
+```{r}
+p1 <- ordirgl(comm_NMDS, type = "t")
+sites <- scores(comm_NMDS, choices=1:3, display="sites")
+#text(p1$xyz.convert(sites), rownames(sites), cex=0.7, xpd=TRUE)
+orgltext(comm_NMDS, display = "sites")
+with(comm_groups, orglellipse(comm_NMDS, comm_groups$BDS.pres, col = c("red", "blue"), kind = "sd"))
+# points(pl, "points", pch=16, col="black", cex = 0.7)
+
+
+p2 <- ordirgl(comm_NMDS, type = "t", display = "species")
+spp <- scores(comm_NMDS, choices=1:3, display="species")
+orgltext(comm_NMDS, display = "species")
+with(comm_groups, orglellipse(comm_NMDS, comm_groups$BDS.pres, col = c("red", "blue"), kind = "sd"))
+```
+
+
 
 Use `envfit` to determine which species were the intrinsic drivers of the waterbody distribution pattern:
 ```{r}
-spp.fit <- envfit(comm_NMDS, df, permutations = 999)
+spp.fit <- envfit(comm_NMDS, df, permutations = 999, choices = 1:3)
 head(spp.fit)
+env_coord <- as.data.frame(vegan::scores(spp.fit, "vectors"))* ordiArrowMul(spp.fit)
 ```
 
-Plot intrinsic species:
+Plot intrinsic species with a flattened 3D plot:
 ```{r}
-#png("./IntrinsicSpp.png")
-ordiplot(comm_NMDS, type = "n")
-orditorp(comm_NMDS, display = "sites", labels = T,
-         #pch = c(1,16)[comm_groups$BDS.pres], 
-         cex = 1)
-plot(spp.fit, 
+#jpeg("./IntrinsicSpp3d.jpg", width = 1000, height = 600, res = 100)
+
+p4 <- ordiplot3d(comm_NMDS, type = "n", box = FALSE, angle = 160, scale.y = 0.5)
+plot(p4$envfit.convert(spp.fit), at = p4$origin, 
      p.max = 0.05, # change the significance level of species shown
      col = "black", 
      cex = 1) 
-abline(h = 0, lty = 3)
-abline(v = 0, lty = 3)
+
 #dev.off()
+
 ```
+Which species influenced the NMDS1 axis the most?
+```{r}
+rownames(env_coord[which(env_coord[,1] == max(env_coord[,1])),])
+max(env_coord[,1]) # most + influential
+rownames(env_coord[which(env_coord[,1] == min(env_coord[,1])),])
+min(env_coord[,1]) # most - influential
+```
+
+Which species influenced the NMDS2 axis the most?
+```{r}
+rownames(env_coord[which(env_coord[,2] == max(env_coord[,2])),])
+max(env_coord[,2]) # most + influential
+rownames(env_coord[which(env_coord[,2] == min(env_coord[,2])),])
+min(env_coord[,2]) # most - influential
+```
+
+Which species influenced the NMDS3 axis the most?
+```{r}
+rownames(env_coord[which(env_coord[,3] == max(env_coord[,3])),])
+max(env_coord[,3]) # most + influential
+rownames(env_coord[which(env_coord[,3] == min(env_coord[,3])),])
+min(env_coord[,3]) # most - influential
+```
+
