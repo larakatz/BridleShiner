@@ -106,13 +106,18 @@ abline(v = 0, lty = 3)
 mtext("B", side = 1, adj = 1, line = -1.5, at = 1.8, cex = 2)
 #dev.off()
 ```
+
+## Envfit
+
+See https://jkzorz.github.io/2020/04/04/NMDS-extras.html or https://www.rpubs.com/RGrieger/545184 for more info on `envfit`.
+
 Use `envfit` to determine which species were the intrinsic drivers of the waterbody distribution pattern:
 ```{r}
 spp.fit <- envfit(comm_NMDS, df, permutations = 999)
 head(spp.fit)
 ```
 
-The `envfit` output contains information on the length of the segments for each variable. The segments are scaled to the r2 value, so that the environmental variables with a longer segment are more strongly correlated with the data than those with a shorter segment. You can extract this information with scores. Then these lengths are further scaled to fit the plot. This is done with a multiplier that is analysis specific, and can be accessed using the command ordiArrowMul(en). Below I multiply the scores by this multiplier to keep the coordinates in the correct proportion.
+Scale arrow segments to R2 value and to the plot:
 ```{r}
 env_coord <- as.data.frame(vegan::scores(spp.fit, display = "vectors")) * ordiArrowMul(spp.fit)
 env_coord[order(env_coord$NMDS1),]
@@ -294,7 +299,9 @@ orgltext(comm_NMDS, display = "species")
 with(comm_groups, orglellipse(comm_NMDS, comm_groups$BDS.pres, col = c("red", "blue"), kind = "sd"))
 ```
 
+## Envfit
 
+See https://jkzorz.github.io/2020/04/04/NMDS-extras.html or https://www.rpubs.com/RGrieger/545184 for more info on `envfit`.
 
 Use `envfit` to determine which species were the intrinsic drivers of the waterbody distribution pattern:
 ```{r}
