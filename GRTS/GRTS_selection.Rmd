@@ -1,0 +1,58 @@
+---
+title: "GRTS generation"
+author: "Lara Katz"
+date: "2024-02-28"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# GRTS generation
+
+Libraries: 
+```{r message=FALSE}
+#install.packages("spsurvey")
+
+library(knitr)
+library(testthat)
+library(rmarkdown)
+library(lwgeom)
+library(spsurvey)
+library(tidyverse)
+library(sf)
+```
+
+Bring in shapefiles:
+```{r}
+bounds <- sf::read_sf("./SamplingGrid.shp")
+legacy <- sf::read_sf("./Legacy_Sites.shp")
+```
+
+Generate 60 random sites, including historical waterbodies SOKOLK and CRESLK and 25 oversample points:
+```{r}
+set.seed(71)
+# eqprob <- grts(bounds, n_base = 200)
+# rho_replace <- grts(bounds, n_base = 60, n_over = 25)
+legacysites <- grts(bounds, n_base = 60, n_over = 25, legacy_sites = legacy)
+```
+
+Plot:
+```{r}
+sp_plot(legacysites, bounds, key.width = lcm(3))
+```
+
+Write shapefiles of selected points:
+```{r}
+st_write(legacysites$sites_base, "./GRTSpointsBase.shp")
+st_write(legacysites$sites_legacy, "./GRTSpointsLegacy.shp")
+st_write(legacysites$sites_over, "./GRTSpointsOver.shp")
+```
+
+Use ArcGIS Pro to determine which points overlap with which hexagon grid cell.
+
+For help:
+```{r}
+vignette("sampling", "spsurvey")
+```
